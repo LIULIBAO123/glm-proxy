@@ -1,19 +1,70 @@
 /**
  * Request statistics tracker.
  * Tracks request counts, errors, response times by model and time window.
+ * Persists data to stats.json so logs survive process restarts.
  */
 
-import { log } from './config.js';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { config, log } from './config.js';
+
+const STATS_FILE = join(config.dataDir, 'stats.json');
+const MAX_HISTORY = 10000;
+const SAVE_INTERVAL_MS = 5000;
 
 const stats = {
   totalRequests: 0,
   totalSuccess: 0,
   totalErrors: 0,
   startTime: Date.now(),
-  requests: [],   // { time, model, success, duration, accountId }
+  requests: [],
 };
 
-const MAX_HISTORY = 10000;
+let _savePending = false;
+let _saveTimer = null;
+
+function loadStats() {
+  if (!existsSync(STATS_FILE)) return;
+  try {
+    const data = JSON.parse(readFileSync(STATS_FILE, 'utf-8'));
+    if (data && typeof data === 'object') {
+      stats.totalRequests = data.totalRequests || 0;
+      stats.totalSuccess = data.totalSuccess || 0;
+      stats.totalErrors = data.totalErrors || 0;
+      stats.startTime = data.startTime || Date.now();
+      if (Array.isArray(data.requests)) {
+        stats.requests = data.requests;
+      }
+      log.info(`Loaded ${stats.requests.length} log(s) from ${STATS_FILE}`);
+    }
+  } catch (err) {
+    log.error('Failed to load stats:', err.message);
+  }
+}
+
+function saveStats() {
+  try {
+    writeFileSync(STATS_FILE, JSON.stringify({
+      totalRequests: stats.totalRequests,
+      totalSuccess: stats.totalSuccess,
+      totalErrors: stats.totalErrors,
+      startTime: stats.startTime,
+      requests: stats.requests,
+    }), 'utf-8');
+  } catch (err) {
+    log.error('Failed to save stats:', err.message);
+  }
+  _savePending = false;
+}
+
+function scheduleSave() {
+  if (_savePending) return;
+  _savePending = true;
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveStats, SAVE_INTERVAL_MS);
+}
+
+loadStats();
 
 export function recordStats({ model, success, duration, accountId, accountName, tokensUsed, promptTokens, completionTokens }) {
   stats.totalRequests++;
@@ -35,6 +86,8 @@ export function recordStats({ model, success, duration, accountId, accountName, 
   if (stats.requests.length > MAX_HISTORY) {
     stats.requests = stats.requests.slice(-MAX_HISTORY / 2);
   }
+
+  scheduleSave();
 }
 
 export function getCallLogs(limit = 50, offset = 0) {
