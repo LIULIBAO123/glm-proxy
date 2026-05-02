@@ -35,7 +35,8 @@ export async function handleChatCompletions(req, res, body) {
   }
 
   const isStream = payload.stream === true;
-  const targetUrl = new URL('/v1/chat/completions', account.baseUrl);
+  const base = account.baseUrl.replace(/\/$/, '');
+  const targetUrl = new URL(base + '/chat/completions');
 
   log.debug(`Forwarding to ${account.name || account.id} → ${targetUrl.href} (stream=${isStream})`);
 
