@@ -87,13 +87,14 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
     }
 
     reportSuccess(account.id);
+    const safeAccountLabel = encodeURIComponent(account.name || account.id);
 
     if (isStream) {
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         'connection': 'keep-alive',
-        'x-glm-account': account.name || account.id,
+        'x-glm-account': safeAccountLabel,
       });
       let streamBuf = '';
       proxyRes.on('data', chunk => {
@@ -111,7 +112,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       proxyRes.on('data', chunk => chunks.push(chunk));
       proxyRes.on('end', () => {
         const respBuf = Buffer.concat(chunks);
-        const headers = { 'content-type': 'application/json', 'x-glm-account': account.name || account.id, 'content-length': respBuf.length };
+        const headers = { 'content-type': 'application/json', 'x-glm-account': safeAccountLabel, 'content-length': respBuf.length };
         res.writeHead(200, headers);
         res.end(respBuf);
         const usage = extractUsageFromBody(respBuf.toString());
