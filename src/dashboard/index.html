@@ -513,22 +513,18 @@ async function queryBal(id) {
     const res = await fetch(`${API}/balance/${id}`);
     const data = await res.json();
     let display = '';
-    if (data.quotaLimits && data.quotaLimits.length) {
-      const tokenLimit = data.quotaLimits.find(l => l.type === 'TOKENS_LIMIT');
-      if (tokenLimit) {
-        display = `${(100 - tokenLimit.percentage).toFixed(1)}% 剩余`;
-      } else {
-        display = data.quotaLimits.map(l => `${l.type}: ${l.remaining}`).join(', ');
-      }
-    }
-    if (data.packages && data.packages.length) {
-      display = data.packages.map(p => `${p.name}: ${p.balance.toLocaleString()}`).join(' | ');
-    }
-    if (data.tokens !== null && data.tokens !== undefined) {
-      display = display ? display : `${data.tokens.toLocaleString()} tokens`;
+    if (data.summary) {
+      const s = data.summary;
+      const parts = [];
+      if (s.common) parts.push(`通用:${s.common.toLocaleString()}`);
+      if (s.glm46v) parts.push(`4.6V:${s.glm46v.toLocaleString()}`);
+      if (s.glm45air) parts.push(`4.5Air:${s.glm45air.toLocaleString()}`);
+      if (s.search) parts.push(`搜索:${s.search}`);
+      if (s.imgvideo) parts.push(`图视:${s.imgvideo}`);
+      display = parts.join(' | ') || '';
     }
     if (!display && data.error) display = data.error;
-    if (!display) display = 'N/A';
+    if (!display) display = '查询无数据';
     el.textContent = display;
     el.style.color = '#4ade80';
   } catch (e) {
