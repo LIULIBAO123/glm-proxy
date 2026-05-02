@@ -5,6 +5,7 @@
 
 import { selectAccount, reportError, reportSuccess } from '../auth.js';
 import { config, log } from '../config.js';
+import { recordStats } from '../stats.js';
 import https from 'https';
 import http from 'http';
 
@@ -35,6 +36,7 @@ export async function handleChatCompletions(req, res, body) {
   }
 
   const isStream = payload.stream === true;
+  const startTime = Date.now();
   const base = account.baseUrl.replace(/\/$/, '');
   const targetUrl = new URL(base + '/chat/completions');
 
@@ -63,6 +65,7 @@ export async function handleChatCompletions(req, res, body) {
       proxyRes.on('data', chunk => { errorBody += chunk; });
       proxyRes.on('end', () => {
         reportError(account.id, new Error(`HTTP ${status}: ${errorBody.slice(0, 200)}`));
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id });
         log.warn(`Account ${account.name} returned ${status}`);
 
         // Retry with another account on 429 or 5xx
@@ -87,14 +90,28 @@ export async function handleChatCompletions(req, res, body) {
         'connection': 'keep-alive',
         'x-glm-account': account.name || account.id,
       });
-      proxyRes.on('data', chunk => res.write(chunk));
-      proxyRes.on('end', () => res.end());
+      let streamBuf = '';
+      proxyRes.on('data', chunk => {
+        res.write(chunk);
+        streamBuf += chunk.toString();
+      });
+      proxyRes.on('end', () => {
+        res.end();
+        const usage = extractUsageFromStream(streamBuf);
+        recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
+      });
       proxyRes.on('error', () => res.end());
     } else {
-      const headers = { 'content-type': 'application/json', 'x-glm-account': account.name || account.id };
-      if (proxyRes.headers['content-length']) headers['content-length'] = proxyRes.headers['content-length'];
-      res.writeHead(200, headers);
-      proxyRes.pipe(res);
+      const chunks = [];
+      proxyRes.on('data', chunk => chunks.push(chunk));
+      proxyRes.on('end', () => {
+        const respBuf = Buffer.concat(chunks);
+        const headers = { 'content-type': 'application/json', 'x-glm-account': account.name || account.id, 'content-length': respBuf.length };
+        res.writeHead(200, headers);
+        res.end(respBuf);
+        const usage = extractUsageFromBody(respBuf.toString());
+        recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
+      });
     }
   });
 
@@ -107,6 +124,39 @@ export async function handleChatCompletions(req, res, body) {
 
   proxyReq.write(requestBody);
   proxyReq.end();
+}
+
+function extractUsageFromBody(body) {
+  try {
+    const data = JSON.parse(body);
+    if (data.usage) {
+      return {
+        tokensUsed: data.usage.total_tokens || 0,
+        promptTokens: data.usage.prompt_tokens || 0,
+        completionTokens: data.usage.completion_tokens || 0,
+      };
+    }
+  } catch {}
+  return { tokensUsed: 0, promptTokens: 0, completionTokens: 0 };
+}
+
+function extractUsageFromStream(streamData) {
+  const lines = streamData.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].replace(/^data:\s*/, '').trim();
+    if (!line || line === '[DONE]') continue;
+    try {
+      const data = JSON.parse(line);
+      if (data.usage) {
+        return {
+          tokensUsed: data.usage.total_tokens || 0,
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0,
+        };
+      }
+    } catch {}
+  }
+  return { tokensUsed: 0, promptTokens: 0, completionTokens: 0 };
 }
 
 // Simple one-retry failover: try a different account on 429/5xx

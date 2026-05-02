@@ -6,8 +6,9 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
-import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey } from '../auth.js';
+import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey, removeAccountsByStatus } from '../auth.js';
 import { queryBalance } from '../balance.js';
+import { getStatsOverview, getRequestTimeline, getModelStats, getCallLogs } from '../stats.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +84,40 @@ export async function handleDashboardApi(req, res, path, url) {
       json(res, 200, { success: toggleAccount(id, body.active) });
       return;
     }
+  }
+
+  // Bulk remove by status
+  if (path === '/api/dashboard/accounts/bulk-remove' && req.method === 'POST') {
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const count = removeAccountsByStatus(body.status);
+      json(res, 200, { success: true, removed: count });
+    } catch (e) {
+      json(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // Stats API
+  if (path === '/api/dashboard/stats' && req.method === 'GET') {
+    const window = url.searchParams.get('window');
+    const windowMs = window ? parseInt(window) : null;
+    json(res, 200, {
+      overview: getStatsOverview(),
+      timeline: getRequestTimeline(windowMs),
+      models: getModelStats(windowMs),
+    });
+    return;
+  }
+
+  // Call logs
+  if (path === '/api/dashboard/logs' && req.method === 'GET') {
+    const limit = parseInt(url.searchParams.get('limit')) || 50;
+    const offset = parseInt(url.searchParams.get('offset')) || 0;
+    json(res, 200, getCallLogs(limit, offset));
+    return;
   }
 
   // Balance query

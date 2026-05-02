@@ -156,7 +156,7 @@ export function addAccount({ name, apiKey, baseUrl, rpm }) {
 
   const account = {
     id: randomUUID(),
-    name: name || `Account-${accounts.length + 1}`,
+    name: name || `账号${accounts.length + 1}`,
     apiKey,
     baseUrl: baseUrl || 'https://open.bigmodel.cn/api/paas/v4',
     status: 'active',
@@ -218,6 +218,25 @@ export function getAccountCount() {
     disabled: accounts.filter(a => a.status === 'disabled').length,
     cooldown: accounts.filter(a => a.status === 'cooldown').length,
   };
+}
+
+export function removeAccountsByStatus(status) {
+  const toRemove = accounts.filter(a => a.status === status);
+  for (const a of toRemove) {
+    const idx = accounts.findIndex(x => x.id === a.id);
+    if (idx !== -1) accounts.splice(idx, 1);
+  }
+  if (toRemove.length) saveAccounts();
+  log.info(`Bulk removed ${toRemove.length} accounts with status: ${status}`);
+  return toRemove.length;
+}
+
+export function markLowBalance(id) {
+  const account = accounts.find(a => a.id === id);
+  if (!account) return false;
+  account.status = 'low_balance';
+  saveAccounts();
+  return true;
 }
 
 export function getAccountApiKey(id) {
