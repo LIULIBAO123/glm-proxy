@@ -3,7 +3,7 @@
  * Forwards requests to GLM API with account pool rotation.
  */
 
-import { selectAccount, reportError, reportSuccess } from '../auth.js';
+import { selectAccount, reportError, reportSuccess, markLowBalance } from '../auth.js';
 import { config, log } from '../config.js';
 import { recordStats } from '../stats.js';
 import https from 'https';
@@ -68,11 +68,16 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       proxyRes.on('end', () => {
         reportError(account.id, new Error(`HTTP ${status}: ${errorBody.slice(0, 200)}`));
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
-        log.warn(`Account ${account.name} returned ${status}`);
+        log.warn(`Account ${account.name} returned ${status}: ${errorBody.slice(0, 200)}`);
+
+        if (isLowBalanceError(status, errorBody)) {
+          markLowBalance(account.id);
+          log.warn(`Account ${account.name} marked as low_balance (auto-detected)`);
+        }
 
         if (res.headersSent) return;
 
-        if ((status === 429 || status >= 500) && !_excludeAccountId) {
+        if ((status === 429 || status >= 500 || isLowBalanceError(status, errorBody)) && !_excludeAccountId) {
           log.info(`Retrying with different account (excluding ${account.name})`);
           handleChatCompletions(req, res, body, account.id);
           return;
@@ -131,6 +136,19 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
 
   proxyReq.write(requestBody);
   proxyReq.end();
+}
+
+const LOW_BALANCE_PATTERNS = [
+  '余额不足', '额度不足', '余额已用完', '配额不足', '资源包余额',
+  'insufficient balance', 'insufficient quota', 'quota exceeded',
+  'billing hard limit', 'exceeded your current quota',
+  '1113', '1301',
+];
+
+function isLowBalanceError(status, body) {
+  if (!body) return false;
+  const lower = body.toLowerCase();
+  return LOW_BALANCE_PATTERNS.some(p => lower.includes(p.toLowerCase()));
 }
 
 function extractUsageFromBody(body) {
