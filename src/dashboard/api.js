@@ -6,7 +6,8 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
-import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount } from '../auth.js';
+import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey } from '../auth.js';
+import { queryBalance } from '../balance.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +83,21 @@ export async function handleDashboardApi(req, res, path, url) {
       json(res, 200, { success: toggleAccount(id, body.active) });
       return;
     }
+  }
+
+  // Balance query
+  const balanceMatch = path.match(/^\/api\/dashboard\/balance\/([^/]+)$/);
+  if (balanceMatch && req.method === 'GET') {
+    const id = balanceMatch[1];
+    const apiKey = getAccountApiKey(id);
+    if (!apiKey) { json(res, 404, { error: 'Account not found' }); return; }
+    try {
+      const balance = await queryBalance(apiKey);
+      json(res, 200, balance);
+    } catch (e) {
+      json(res, 500, { error: e.message });
+    }
+    return;
   }
 
   json(res, 404, { error: 'Not found' });

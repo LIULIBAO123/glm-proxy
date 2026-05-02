@@ -66,7 +66,10 @@ th { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; letter-spacin
   </div>
 
   <div class="panel">
-    <div class="panel-title">Accounts</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div class="panel-title" style="margin-bottom:0">Accounts</div>
+      <button class="btn btn-outline" onclick="queryAllBalances()">Query All Balances</button>
+    </div>
     <div id="accounts-table"></div>
   </div>
 
@@ -113,7 +116,7 @@ function renderAccounts(list) {
     container.innerHTML = '<div class="empty">No accounts yet. Add one above.</div>';
     return;
   }
-  let html = `<table><thead><tr><th>Name</th><th>API Key</th><th>Base URL</th><th>Status</th><th>RPM</th><th>Requests</th><th>Errors</th><th>Actions</th></tr></thead><tbody>`;
+  let html = `<table><thead><tr><th>Name</th><th>API Key</th><th>Base URL</th><th>Status</th><th>RPM</th><th>Requests</th><th>Errors</th><th>Balance</th><th>Actions</th></tr></thead><tbody>`;
   for (const a of list) {
     const statusClass = a.status === 'active' ? 'status-active' : a.status === 'cooldown' ? 'status-cooldown' : 'status-disabled';
     html += `<tr>
@@ -124,6 +127,7 @@ function renderAccounts(list) {
       <td>${a.rpmUsed}/${a.rpm}</td>
       <td>${a.totalRequests}</td>
       <td>${a.totalErrors}</td>
+      <td><span id="bal-${a.id}" style="font-size:0.8rem;color:#94a3b8">--</span> <button class="btn btn-sm btn-outline" onclick="queryBal('${a.id}')" style="font-size:0.7rem;padding:2px 6px">Query</button></td>
       <td>
         <button class="btn btn-sm btn-outline" onclick="toggleAcc('${a.id}', ${a.status !== 'active'})">${a.status === 'active' ? 'Disable' : 'Enable'}</button>
         <button class="btn btn-sm btn-danger" onclick="delAcc('${a.id}')">Delete</button>
@@ -167,6 +171,47 @@ async function toggleAcc(id, active) {
     body: JSON.stringify({ active }),
   });
   fetchStatus();
+}
+
+async function queryBal(id) {
+  const el = document.getElementById('bal-' + id);
+  if (!el) return;
+  el.textContent = 'Loading...';
+  el.style.color = '#94a3b8';
+  try {
+    const res = await fetch(`${API}/balance/${id}`);
+    const data = await res.json();
+    let display = '';
+    if (data.quotaLimits && data.quotaLimits.length) {
+      const tokenLimit = data.quotaLimits.find(l => l.type === 'TOKENS_LIMIT');
+      if (tokenLimit) {
+        display = `${(100 - tokenLimit.percentage).toFixed(1)}% remaining`;
+      } else {
+        display = data.quotaLimits.map(l => `${l.type}: ${l.remaining}`).join(', ');
+      }
+    }
+    if (data.packages && data.packages.length) {
+      display = data.packages.map(p => `${p.name}: ${p.balance.toLocaleString()}`).join(' | ');
+    }
+    if (data.tokens !== null && data.tokens !== undefined) {
+      display = display ? display : `${data.tokens.toLocaleString()} tokens`;
+    }
+    if (!display && data.error) display = data.error;
+    if (!display) display = 'N/A';
+    el.textContent = display;
+    el.style.color = '#4ade80';
+  } catch (e) {
+    el.textContent = 'Error';
+    el.style.color = '#f87171';
+  }
+}
+
+async function queryAllBalances() {
+  const res = await fetch(`${API}/status`);
+  const data = await res.json();
+  for (const a of data.accounts) {
+    queryBal(a.id);
+  }
 }
 
 fetchStatus();

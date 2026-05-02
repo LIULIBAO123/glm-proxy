@@ -220,6 +220,11 @@ export function getAccountCount() {
   };
 }
 
+export function getAccountApiKey(id) {
+  const account = accounts.find(a => a.id === id);
+  return account ? account.apiKey : null;
+}
+
 export function validateApiKey(req) {
   if (!config.apiKey) return true;
   const authHeader = String(req.headers['authorization'] || '').trim();
