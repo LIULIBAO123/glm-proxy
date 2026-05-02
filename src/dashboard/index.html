@@ -360,6 +360,7 @@ tr:hover { background: rgba(30,35,48,0.5); }
 <script>
 const API = '/api/dashboard';
 let refreshTimer;
+const balanceData = {}; // { accountId: { text, color } }
 
 const pageTitles = {
   dashboard: { title: '仪表盘', sub: '系统运行状态与关键指标概览' },
@@ -423,7 +424,7 @@ function renderAccounts(list) {
         <td style="font-size:0.8rem">${a.rpmUsed}/${a.rpm}</td>
         <td>${a.totalRequests}</td>
         <td>${a.totalErrors}</td>
-        <td><span id="bal-${a.id}" style="font-size:0.75rem;color:#64748b">--</span> <button class="btn btn-ghost btn-sm" onclick="queryBal('${a.id}')" style="font-size:0.65rem;padding:2px 5px">查询</button></td>
+        <td><span id="bal-${a.id}" style="font-size:0.75rem;color:${balanceData[a.id]?.color || '#64748b'}">${balanceData[a.id]?.text || '--'}</span> <button class="btn btn-ghost btn-sm" onclick="queryBal('${a.id}')" style="font-size:0.65rem;padding:2px 5px">查询</button></td>
         <td style="white-space:nowrap">
           <button class="btn btn-ghost btn-sm" onclick="toggleAcc('${a.id}', ${a.status !== 'active'})">${a.status === 'active' ? '禁用' : '启用'}</button>
           <button class="btn btn-danger btn-sm" onclick="delAcc('${a.id}')">删除</button>
@@ -513,23 +514,19 @@ async function queryBal(id) {
     const res = await fetch(`${API}/balance/${id}`);
     const data = await res.json();
     let display = '';
-    if (data.summary) {
-      const s = data.summary;
-      const parts = [];
-      if (s.common) parts.push(`通用:${s.common.toLocaleString()}`);
-      if (s.glm46v) parts.push(`4.6V:${s.glm46v.toLocaleString()}`);
-      if (s.glm45air) parts.push(`4.5Air:${s.glm45air.toLocaleString()}`);
-      if (s.search) parts.push(`搜索:${s.search}`);
-      if (s.imgvideo) parts.push(`图视:${s.imgvideo}`);
-      display = parts.join(' | ') || '';
+    let color = '#4ade80';
+    if (data.summary && data.summary.common) {
+      display = `通用: ${data.summary.common.toLocaleString()}`;
     }
-    if (!display && data.error) display = data.error;
-    if (!display) display = '查询无数据';
+    if (!display && data.error) { display = data.error; color = '#f87171'; }
+    if (!display) { display = '无通用余额'; color = '#fbbf24'; }
     el.textContent = display;
-    el.style.color = '#4ade80';
+    el.style.color = color;
+    balanceData[id] = { text: display, color };
   } catch (e) {
     el.textContent = '查询失败';
     el.style.color = '#f87171';
+    balanceData[id] = { text: '查询失败', color: '#f87171' };
   }
 }
 
