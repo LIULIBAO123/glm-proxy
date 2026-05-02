@@ -115,10 +115,9 @@ export function reportSuccess(accountId) {
 
 // --- Account selection (round-robin with health check) ---
 
-export function selectAccount() {
+export function selectAccount(excludeId) {
   const now = Date.now();
 
-  // Reactivate cooldown accounts
   for (const a of accounts) {
     if (a.status === 'cooldown' && a.disabledUntil && now > a.disabledUntil) {
       a.status = 'active';
@@ -128,10 +127,9 @@ export function selectAccount() {
     }
   }
 
-  const eligible = accounts.filter(a => a.status === 'active' && rpmCount(a) < a.rpm);
+  const eligible = accounts.filter(a => a.status === 'active' && rpmCount(a) < a.rpm && a.id !== excludeId);
   if (eligible.length === 0) {
-    // Try accounts even if over RPM (degraded mode)
-    const active = accounts.filter(a => a.status === 'active');
+    const active = accounts.filter(a => a.status === 'active' && a.id !== excludeId);
     if (active.length === 0) return null;
     const idx = _roundRobinIndex % active.length;
     _roundRobinIndex++;

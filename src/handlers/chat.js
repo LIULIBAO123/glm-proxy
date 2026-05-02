@@ -9,7 +9,7 @@ import { recordStats } from '../stats.js';
 import https from 'https';
 import http from 'http';
 
-export async function handleChatCompletions(req, res, body) {
+export async function handleChatCompletions(req, res, body, _excludeAccountId) {
   let payload;
   try {
     payload = JSON.parse(body);
@@ -26,12 +26,14 @@ export async function handleChatCompletions(req, res, body) {
     payload.max_tokens = config.maxTokens;
   }
 
-  const account = selectAccount();
+  const account = selectAccount(_excludeAccountId);
   if (!account) {
-    res.writeHead(503, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      error: { message: 'No available accounts in pool. Add accounts via POST /auth/accounts', type: 'server_error' }
-    }));
+    if (!res.headersSent) {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: 'No available accounts in pool. Add accounts via POST /auth/accounts', type: 'server_error' }
+      }));
+    }
     return;
   }
 
@@ -65,11 +67,14 @@ export async function handleChatCompletions(req, res, body) {
       proxyRes.on('data', chunk => { errorBody += chunk; });
       proxyRes.on('end', () => {
         reportError(account.id, new Error(`HTTP ${status}: ${errorBody.slice(0, 200)}`));
-        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id });
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Account ${account.name} returned ${status}`);
 
-        // Retry with another account on 429 or 5xx
-        if ((status === 429 || status >= 500) && accounts_retry(req, res, body, account.id)) {
+        if (res.headersSent) return;
+
+        if ((status === 429 || status >= 500) && !_excludeAccountId) {
+          log.info(`Retrying with different account (excluding ${account.name})`);
+          handleChatCompletions(req, res, body, account.id);
           return;
         }
 
@@ -100,7 +105,7 @@ export async function handleChatCompletions(req, res, body) {
         const usage = extractUsageFromStream(streamBuf);
         recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
       });
-      proxyRes.on('error', () => res.end());
+      proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
     } else {
       const chunks = [];
       proxyRes.on('data', chunk => chunks.push(chunk));
@@ -118,6 +123,7 @@ export async function handleChatCompletions(req, res, body) {
   proxyReq.on('error', (err) => {
     reportError(account.id, err);
     log.error(`Request to ${account.name} failed:`, err.message);
+    if (res.headersSent) return;
     res.writeHead(502, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { message: `Upstream error: ${err.message}`, type: 'server_error' } }));
   });
@@ -159,18 +165,3 @@ function extractUsageFromStream(streamData) {
   return { tokensUsed: 0, promptTokens: 0, completionTokens: 0 };
 }
 
-// Simple one-retry failover: try a different account on 429/5xx
-let _retryDepth = 0;
-function accounts_retry(req, res, body, excludeId) {
-  if (_retryDepth > 0) return false;
-  _retryDepth++;
-  try {
-    const account = selectAccount();
-    if (!account || account.id === excludeId) return false;
-    log.info(`Retrying with account ${account.name || account.id}`);
-    handleChatCompletions(req, res, body);
-    return true;
-  } finally {
-    _retryDepth--;
-  }
-}
