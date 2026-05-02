@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  glm-proxy:
+    build: .
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - HOST=0.0.0.0
+      - API_KEY=${API_KEY:-}
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-glm-4-flash}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

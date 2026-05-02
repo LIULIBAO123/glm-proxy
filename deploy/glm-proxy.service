@@ -1,0 +1,15 @@
+[Unit]
+Description=GLM Proxy - Multi-account API load balancer
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/glm-proxy
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

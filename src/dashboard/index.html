@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLM Proxy Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+.container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+h1 { font-size: 1.8rem; margin-bottom: 0.5rem; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.subtitle { color: #94a3b8; margin-bottom: 2rem; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.stat-card { background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
+.stat-card .label { font-size: 0.85rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-card .value { font-size: 2rem; font-weight: 700; margin-top: 0.5rem; }
+.stat-card .value.green { color: #4ade80; }
+.stat-card .value.yellow { color: #fbbf24; }
+.stat-card .value.red { color: #f87171; }
+.panel { background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; margin-bottom: 2rem; }
+.panel-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; }
+.form-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.form-row input { flex: 1; min-width: 200px; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 0.9rem; }
+.form-row input:focus { outline: none; border-color: #60a5fa; }
+.btn { padding: 0.6rem 1.2rem; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.2s; }
+.btn-primary { background: #3b82f6; color: white; }
+.btn-primary:hover { background: #2563eb; }
+.btn-danger { background: #ef4444; color: white; }
+.btn-danger:hover { background: #dc2626; }
+.btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+.btn-outline { background: transparent; border: 1px solid #475569; color: #94a3b8; }
+.btn-outline:hover { border-color: #60a5fa; color: #60a5fa; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid #334155; }
+th { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.status-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+.status-active { background: #064e3b; color: #4ade80; }
+.status-disabled { background: #451a03; color: #fbbf24; }
+.status-cooldown { background: #450a0a; color: #f87171; }
+.empty { text-align: center; color: #64748b; padding: 3rem; }
+.api-info { background: #0f172a; border-radius: 8px; padding: 1rem; margin-top: 1rem; font-family: 'Fira Code', monospace; font-size: 0.85rem; color: #94a3b8; overflow-x: auto; }
+.api-info code { color: #60a5fa; }
+@media (max-width: 768px) { .container { padding: 1rem; } .form-row { flex-direction: column; } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>GLM Proxy Dashboard</h1>
+  <p class="subtitle">Multi-account API load balancer for GLM (ZhipuAI)</p>
+
+  <div class="stats" id="stats">
+    <div class="stat-card"><div class="label">Total Accounts</div><div class="value" id="stat-total">-</div></div>
+    <div class="stat-card"><div class="label">Active</div><div class="value green" id="stat-active">-</div></div>
+    <div class="stat-card"><div class="label">Cooldown</div><div class="value yellow" id="stat-cooldown">-</div></div>
+    <div class="stat-card"><div class="label">Disabled</div><div class="value red" id="stat-disabled">-</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Add Account</div>
+    <div class="form-row">
+      <input type="text" id="inp-name" placeholder="Name (optional)">
+      <input type="text" id="inp-key" placeholder="API Key *">
+      <input type="text" id="inp-url" placeholder="Base URL (default: https://open.bigmodel.cn/api/paas/v4)">
+      <button class="btn btn-primary" onclick="addAccount()">Add</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Accounts</div>
+    <div id="accounts-table"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">API Usage</div>
+    <div class="api-info">
+      <p>Endpoint: <code>POST http://localhost:PORT/v1/chat/completions</code></p>
+      <p style="margin-top:0.5rem">Example:</p>
+      <pre style="margin-top:0.5rem;color:#e2e8f0">curl http://localhost:3003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "glm-4-flash",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/dashboard';
+let refreshTimer;
+
+async function fetchStatus() {
+  try {
+    const res = await fetch(`${API}/status`);
+    const data = await res.json();
+    renderStats(data.summary);
+    renderAccounts(data.accounts);
+  } catch (e) { console.error(e); }
+}
+
+function renderStats(s) {
+  document.getElementById('stat-total').textContent = s.total;
+  document.getElementById('stat-active').textContent = s.active;
+  document.getElementById('stat-cooldown').textContent = s.cooldown;
+  document.getElementById('stat-disabled').textContent = s.disabled;
+}
+
+function renderAccounts(list) {
+  const container = document.getElementById('accounts-table');
+  if (!list.length) {
+    container.innerHTML = '<div class="empty">No accounts yet. Add one above.</div>';
+    return;
+  }
+  let html = `<table><thead><tr><th>Name</th><th>API Key</th><th>Base URL</th><th>Status</th><th>RPM</th><th>Requests</th><th>Errors</th><th>Actions</th></tr></thead><tbody>`;
+  for (const a of list) {
+    const statusClass = a.status === 'active' ? 'status-active' : a.status === 'cooldown' ? 'status-cooldown' : 'status-disabled';
+    html += `<tr>
+      <td>${esc(a.name)}</td>
+      <td><code>${esc(a.apiKeyPreview)}</code></td>
+      <td style="font-size:0.8rem">${esc(a.baseUrl)}</td>
+      <td><span class="status-badge ${statusClass}">${a.status}</span></td>
+      <td>${a.rpmUsed}/${a.rpm}</td>
+      <td>${a.totalRequests}</td>
+      <td>${a.totalErrors}</td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="toggleAcc('${a.id}', ${a.status !== 'active'})">${a.status === 'active' ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-sm btn-danger" onclick="delAcc('${a.id}')">Delete</button>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+async function addAccount() {
+  const name = document.getElementById('inp-name').value.trim();
+  const apiKey = document.getElementById('inp-key').value.trim();
+  const baseUrl = document.getElementById('inp-url').value.trim();
+  if (!apiKey) { alert('API Key is required'); return; }
+  try {
+    await fetch(`${API}/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, apiKey, baseUrl: baseUrl || undefined }),
+    });
+    document.getElementById('inp-name').value = '';
+    document.getElementById('inp-key').value = '';
+    document.getElementById('inp-url').value = '';
+    fetchStatus();
+  } catch (e) { alert(e.message); }
+}
+
+async function delAcc(id) {
+  if (!confirm('Delete this account?')) return;
+  await fetch(`${API}/accounts/${id}`, { method: 'DELETE' });
+  fetchStatus();
+}
+
+async function toggleAcc(id, active) {
+  await fetch(`${API}/accounts/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  fetchStatus();
+}
+
+fetchStatus();
+refreshTimer = setInterval(fetchStatus, 5000);
+</script>
+</body>
+</html>
