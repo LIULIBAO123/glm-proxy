@@ -115,15 +115,16 @@ export function reportSuccess(accountId) {
   account.lastError = null;
 }
 
-// --- Account selection (weighted round-robin with health check) ---
+// --- Account selection (weighted random with health check) ---
 
-function buildWeightedPool(list) {
-  const pool = [];
+function weightedRandomSelect(list) {
+  const totalWeight = list.reduce((sum, a) => sum + (a.weight || 1), 0);
+  let rand = Math.random() * totalWeight;
   for (const a of list) {
-    const w = a.weight || 1;
-    for (let i = 0; i < w; i++) pool.push(a);
+    rand -= (a.weight || 1);
+    if (rand <= 0) return a;
   }
-  return pool;
+  return list[list.length - 1];
 }
 
 export function selectAccount(excludeId) {
@@ -142,18 +143,12 @@ export function selectAccount(excludeId) {
   if (eligible.length === 0) {
     const active = accounts.filter(a => a.status === 'active' && a.id !== excludeId);
     if (active.length === 0) return null;
-    const pool = buildWeightedPool(active);
-    const idx = _roundRobinIndex % pool.length;
-    _roundRobinIndex++;
-    const selected = pool[idx];
+    const selected = weightedRandomSelect(active);
     recordRequest(selected);
     return selected;
   }
 
-  const pool = buildWeightedPool(eligible);
-  const idx = _roundRobinIndex % pool.length;
-  _roundRobinIndex++;
-  const selected = pool[idx];
+  const selected = weightedRandomSelect(eligible);
   recordRequest(selected);
   return selected;
 }
