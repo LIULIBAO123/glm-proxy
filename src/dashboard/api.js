@@ -6,7 +6,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
-import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey, removeAccountsByStatus } from '../auth.js';
+import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey, removeAccountsByStatus, updateAccountWeight } from '../auth.js';
 import { queryBalance } from '../balance.js';
 import { getStatsOverview, getRequestTimeline, getModelStats, getCallLogs } from '../stats.js';
 
@@ -81,7 +81,11 @@ export async function handleDashboardApi(req, res, path, url) {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString());
-      json(res, 200, { success: toggleAccount(id, body.active) });
+      if (body.weight !== undefined) {
+        json(res, 200, { success: updateAccountWeight(id, body.weight) });
+      } else {
+        json(res, 200, { success: toggleAccount(id, body.active) });
+      }
       return;
     }
   }

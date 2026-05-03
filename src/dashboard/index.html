@@ -416,11 +416,17 @@ function renderAccounts(list) {
       container.innerHTML = '<div class="empty" style="padding:1rem;font-size:0.8rem">无</div>';
       continue;
     }
-    let html = `<table><thead><tr><th>名称</th><th>API Key</th><th>RPM</th><th>请求</th><th>错误</th><th>余额</th><th>操作</th></tr></thead><tbody>`;
+    let html = `<table><thead><tr><th>名称</th><th>API Key</th><th>权重</th><th>RPM</th><th>请求</th><th>错误</th><th>余额</th><th>操作</th></tr></thead><tbody>`;
     for (const a of items) {
+      const w = a.weight || 1;
       html += `<tr>
         <td>${esc(a.name)}</td>
         <td><code style="font-size:0.8rem;color:#60a5fa">${esc(a.apiKeyPreview)}</code></td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="setWeight('${a.id}',${w - 1})" style="padding:1px 5px;font-size:0.7rem" ${w <= 1 ? 'disabled' : ''}>−</button>
+          <span style="display:inline-block;min-width:20px;text-align:center;font-weight:600;color:${w > 1 ? '#fbbf24' : '#64748b'}">${w}</span>
+          <button class="btn btn-ghost btn-sm" onclick="setWeight('${a.id}',${w + 1})" style="padding:1px 5px;font-size:0.7rem" ${w >= 10 ? 'disabled' : ''}>+</button>
+        </td>
         <td style="font-size:0.8rem">${a.rpmUsed}/${a.rpm}</td>
         <td>${a.totalRequests}</td>
         <td>${a.totalErrors}</td>
@@ -501,6 +507,16 @@ async function toggleAcc(id, active) {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ active }),
+  });
+  fetchStatus();
+}
+
+async function setWeight(id, w) {
+  if (w < 1 || w > 10) return;
+  await fetch(`${API}/accounts/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ weight: w }),
   });
   fetchStatus();
 }

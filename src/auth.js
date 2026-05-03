@@ -40,6 +40,7 @@ function loadAccounts() {
           baseUrl: a.baseUrl || 'https://open.bigmodel.cn/api/paas/v4',
           status: a.status || 'active',
           rpm: a.rpm || DEFAULT_RPM,
+          weight: Math.max(1, Math.min(10, parseInt(a.weight) || 1)),
           errorCount: 0,
           lastError: null,
           disabledUntil: null,
@@ -64,6 +65,7 @@ function saveAccounts() {
     baseUrl: a.baseUrl,
     status: a.status,
     rpm: a.rpm,
+    weight: a.weight || 1,
     addedAt: a.addedAt,
     totalRequests: a.totalRequests,
     totalErrors: a.totalErrors,
@@ -113,7 +115,16 @@ export function reportSuccess(accountId) {
   account.lastError = null;
 }
 
-// --- Account selection (round-robin with health check) ---
+// --- Account selection (weighted round-robin with health check) ---
+
+function buildWeightedPool(list) {
+  const pool = [];
+  for (const a of list) {
+    const w = a.weight || 1;
+    for (let i = 0; i < w; i++) pool.push(a);
+  }
+  return pool;
+}
 
 export function selectAccount(excludeId) {
   const now = Date.now();
@@ -131,23 +142,25 @@ export function selectAccount(excludeId) {
   if (eligible.length === 0) {
     const active = accounts.filter(a => a.status === 'active' && a.id !== excludeId);
     if (active.length === 0) return null;
-    const idx = _roundRobinIndex % active.length;
+    const pool = buildWeightedPool(active);
+    const idx = _roundRobinIndex % pool.length;
     _roundRobinIndex++;
-    const selected = active[idx];
+    const selected = pool[idx];
     recordRequest(selected);
     return selected;
   }
 
-  const idx = _roundRobinIndex % eligible.length;
+  const pool = buildWeightedPool(eligible);
+  const idx = _roundRobinIndex % pool.length;
   _roundRobinIndex++;
-  const selected = eligible[idx];
+  const selected = pool[idx];
   recordRequest(selected);
   return selected;
 }
 
 // --- Account CRUD ---
 
-export function addAccount({ name, apiKey, baseUrl, rpm }) {
+export function addAccount({ name, apiKey, baseUrl, rpm, weight }) {
   if (!apiKey) throw new Error('apiKey is required');
   const existing = accounts.find(a => a.apiKey === apiKey);
   if (existing) throw new Error('Account with this API key already exists');
@@ -159,6 +172,7 @@ export function addAccount({ name, apiKey, baseUrl, rpm }) {
     baseUrl: baseUrl || 'https://open.bigmodel.cn/api/paas/v4',
     status: 'active',
     rpm: rpm || DEFAULT_RPM,
+    weight: Math.max(1, Math.min(10, parseInt(weight) || 1)),
     errorCount: 0,
     lastError: null,
     disabledUntil: null,
@@ -199,6 +213,7 @@ export function getAccountList() {
     baseUrl: a.baseUrl,
     status: a.status,
     rpm: a.rpm,
+    weight: a.weight || 1,
     rpmUsed: rpmCount(a),
     errorCount: a.errorCount,
     lastError: a.lastError,
@@ -207,6 +222,14 @@ export function getAccountList() {
     totalErrors: a.totalErrors,
     apiKeyPreview: a.apiKey ? a.apiKey.slice(0, 8) + '...' + a.apiKey.slice(-4) : '',
   }));
+}
+
+export function updateAccountWeight(id, weight) {
+  const account = accounts.find(a => a.id === id);
+  if (!account) return false;
+  account.weight = Math.max(1, Math.min(10, parseInt(weight) || 1));
+  saveAccounts();
+  return true;
 }
 
 export function getAccountCount() {
