@@ -15,14 +15,20 @@ import { join } from 'path';
 import { config, log } from './config.js';
 
 const ACCOUNTS_FILE = join(config.dataDir, 'accounts.json');
+const SELECTION_FILE = join(config.dataDir, 'selection.json');
 
 const accounts = [];
-let _roundRobinIndex = 0;
 
 const DEFAULT_RPM = 60;
 const RPM_WINDOW_MS = 60 * 1000;
 const MAX_ERRORS_BEFORE_DISABLE = 5;
 const COOLDOWN_MS = 5 * 60 * 1000;
+
+// --- Selection mode config ---
+// mode: 'weighted_random' | 'primary'
+// primaryAccountId: account ID for primary mode
+// _primarySkipNext: after primary errors, next request picks a random other account
+const _selection = { mode: 'weighted_random', primaryAccountId: null, _primarySkipNext: false };
 
 // --- Persistence ---
 
@@ -78,6 +84,43 @@ function saveAccounts() {
 }
 
 loadAccounts();
+loadSelectionConfig();
+
+function loadSelectionConfig() {
+  if (!existsSync(SELECTION_FILE)) return;
+  try {
+    const data = JSON.parse(readFileSync(SELECTION_FILE, 'utf-8'));
+    if (data.mode) _selection.mode = data.mode;
+    if (data.primaryAccountId) _selection.primaryAccountId = data.primaryAccountId;
+    log.info(`Selection mode: ${_selection.mode}${_selection.primaryAccountId ? `, primary: ${_selection.primaryAccountId}` : ''}`);
+  } catch (err) {
+    log.error('Failed to load selection config:', err.message);
+  }
+}
+
+function saveSelectionConfig() {
+  try {
+    writeFileSync(SELECTION_FILE, JSON.stringify({
+      mode: _selection.mode,
+      primaryAccountId: _selection.primaryAccountId,
+    }, null, 2), 'utf-8');
+  } catch (err) {
+    log.error('Failed to save selection config:', err.message);
+  }
+}
+
+export function getSelectionConfig() {
+  return { mode: _selection.mode, primaryAccountId: _selection.primaryAccountId };
+}
+
+export function setSelectionConfig({ mode, primaryAccountId }) {
+  if (mode) _selection.mode = mode;
+  if (primaryAccountId !== undefined) _selection.primaryAccountId = primaryAccountId;
+  _selection._primarySkipNext = false;
+  saveSelectionConfig();
+  log.info(`Selection config updated: mode=${_selection.mode}, primary=${_selection.primaryAccountId}`);
+  return getSelectionConfig();
+}
 
 // --- RPM tracking ---
 
@@ -100,6 +143,12 @@ export function reportError(accountId, error) {
   account.errorCount++;
   account.totalErrors++;
   account.lastError = { message: error?.message || String(error), at: new Date().toISOString() };
+
+  if (_selection.mode === 'primary' && accountId === _selection.primaryAccountId) {
+    _selection._primarySkipNext = true;
+    log.info(`Primary account ${account.name} errored, next request will use a backup`);
+  }
+
   if (account.errorCount >= MAX_ERRORS_BEFORE_DISABLE) {
     account.status = 'cooldown';
     account.disabledUntil = Date.now() + COOLDOWN_MS;
@@ -115,7 +164,7 @@ export function reportSuccess(accountId) {
   account.lastError = null;
 }
 
-// --- Account selection (weighted random with health check) ---
+// --- Account selection ---
 
 function weightedRandomSelect(list) {
   const totalWeight = list.reduce((sum, a) => sum + (a.weight || 1), 0);
@@ -127,9 +176,8 @@ function weightedRandomSelect(list) {
   return list[list.length - 1];
 }
 
-export function selectAccount(excludeId) {
+function refreshCooldowns() {
   const now = Date.now();
-
   for (const a of accounts) {
     if (a.status === 'cooldown' && a.disabledUntil && now > a.disabledUntil) {
       a.status = 'active';
@@ -138,18 +186,50 @@ export function selectAccount(excludeId) {
       log.info(`Account ${a.name || a.id} reactivated after cooldown`);
     }
   }
+}
 
+function selectWeightedRandom(excludeId) {
   const eligible = accounts.filter(a => a.status === 'active' && rpmCount(a) < a.rpm && a.id !== excludeId);
   if (eligible.length === 0) {
     const active = accounts.filter(a => a.status === 'active' && a.id !== excludeId);
     if (active.length === 0) return null;
-    const selected = weightedRandomSelect(active);
-    recordRequest(selected);
-    return selected;
+    return weightedRandomSelect(active);
+  }
+  return weightedRandomSelect(eligible);
+}
+
+function selectPrimary(excludeId) {
+  const primary = accounts.find(a => a.id === _selection.primaryAccountId);
+
+  if (_selection._primarySkipNext) {
+    _selection._primarySkipNext = false;
+    const backups = accounts.filter(a =>
+      a.status === 'active' && a.id !== _selection.primaryAccountId && a.id !== excludeId
+    );
+    if (backups.length > 0) {
+      log.info(`Primary skip: using backup account`);
+      return weightedRandomSelect(backups);
+    }
   }
 
-  const selected = weightedRandomSelect(eligible);
-  recordRequest(selected);
+  if (primary && primary.status === 'active' && primary.id !== excludeId) {
+    return primary;
+  }
+
+  return selectWeightedRandom(excludeId);
+}
+
+export function selectAccount(excludeId) {
+  refreshCooldowns();
+
+  let selected;
+  if (_selection.mode === 'primary' && _selection.primaryAccountId) {
+    selected = selectPrimary(excludeId);
+  } else {
+    selected = selectWeightedRandom(excludeId);
+  }
+
+  if (selected) recordRequest(selected);
   return selected;
 }
 

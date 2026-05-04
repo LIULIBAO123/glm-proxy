@@ -249,6 +249,34 @@ tr:hover { background: rgba(30,35,48,0.5); }
         <button class="btn btn-ghost btn-sm" onclick="queryAllBalances()">📊 查询所有余额</button>
       </div>
 
+      <!-- Selection mode panel -->
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">调度模式</div>
+            <div class="panel-desc">选择账号分配策略</div>
+          </div>
+        </div>
+        <div style="padding:0.8rem 1rem;display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.85rem">
+            <input type="radio" name="sel-mode" value="weighted_random" onchange="updateSelectionMode()" checked>
+            <span>加权随机</span>
+            <span style="font-size:0.7rem;color:#64748b">（按权重随机分配请求）</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.85rem">
+            <input type="radio" name="sel-mode" value="primary" onchange="updateSelectionMode()">
+            <span>主力账号</span>
+            <span style="font-size:0.7rem;color:#64748b">（优先使用主力，报错后切换备用一次再回来）</span>
+          </label>
+          <div id="primary-selector" style="display:none;align-items:center;gap:0.4rem">
+            <span style="font-size:0.8rem;color:#94a3b8">主力账号：</span>
+            <select id="sel-primary" class="form-input" style="width:auto;min-width:150px;padding:4px 8px;font-size:0.8rem" onchange="updateSelectionMode()">
+              <option value="">请选择</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
           <div>
@@ -390,6 +418,7 @@ async function fetchStatus() {
     const data = await res.json();
     renderStats(data.summary);
     renderAccounts(data.accounts);
+    populatePrimarySelect(data.accounts);
   } catch (e) { console.error(e); }
 }
 
@@ -519,6 +548,49 @@ async function setWeight(id, w) {
     body: JSON.stringify({ weight: w }),
   });
   fetchStatus();
+}
+
+// --- Selection mode ---
+let _selectionConfig = { mode: 'weighted_random', primaryAccountId: null };
+
+async function loadSelectionConfig() {
+  try {
+    const res = await fetch(`${API}/selection`);
+    _selectionConfig = await res.json();
+  } catch {}
+  applySelectionUI();
+}
+
+function applySelectionUI() {
+  const radios = document.querySelectorAll('input[name="sel-mode"]');
+  radios.forEach(r => { r.checked = r.value === _selectionConfig.mode; });
+  const primaryDiv = document.getElementById('primary-selector');
+  primaryDiv.style.display = _selectionConfig.mode === 'primary' ? 'flex' : 'none';
+}
+
+function populatePrimarySelect(accountList) {
+  const sel = document.getElementById('sel-primary');
+  const currentVal = sel.value || _selectionConfig.primaryAccountId || '';
+  sel.innerHTML = '<option value="">请选择</option>';
+  const active = accountList.filter(a => a.status === 'active' || a.id === _selectionConfig.primaryAccountId);
+  for (const a of active) {
+    sel.innerHTML += `<option value="${a.id}" ${a.id === currentVal ? 'selected' : ''}>${esc(a.name)}</option>`;
+  }
+}
+
+async function updateSelectionMode() {
+  const mode = document.querySelector('input[name="sel-mode"]:checked')?.value || 'weighted_random';
+  const primaryAccountId = document.getElementById('sel-primary').value || null;
+  const primaryDiv = document.getElementById('primary-selector');
+  primaryDiv.style.display = mode === 'primary' ? 'flex' : 'none';
+  try {
+    const res = await fetch(`${API}/selection`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, primaryAccountId }),
+    });
+    _selectionConfig = await res.json();
+  } catch {}
 }
 
 async function queryBal(id) {
@@ -697,6 +769,7 @@ document.getElementById('api-curl-example').textContent = `curl ${baseOrigin}/v1
   }'`;
 
 fetchStatus();
+loadSelectionConfig();
 refreshTimer = setInterval(fetchStatus, 5000);
 </script>
 </body>

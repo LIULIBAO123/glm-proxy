@@ -6,7 +6,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
-import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey, removeAccountsByStatus, updateAccountWeight } from '../auth.js';
+import { getAccountList, getAccountCount, addAccount, removeAccount, toggleAccount, getAccountApiKey, removeAccountsByStatus, updateAccountWeight, getSelectionConfig, setSelectionConfig } from '../auth.js';
 import { queryBalance } from '../balance.js';
 import { getStatsOverview, getRequestTimeline, getModelStats, getCallLogs } from '../stats.js';
 
@@ -121,6 +121,23 @@ export async function handleDashboardApi(req, res, path, url) {
     const limit = parseInt(url.searchParams.get('limit')) || 50;
     const offset = parseInt(url.searchParams.get('offset')) || 0;
     json(res, 200, getCallLogs(limit, offset));
+    return;
+  }
+
+  // Selection mode config
+  if (path === '/api/dashboard/selection' && req.method === 'GET') {
+    json(res, 200, getSelectionConfig());
+    return;
+  }
+  if (path === '/api/dashboard/selection' && req.method === 'POST') {
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      json(res, 200, setSelectionConfig(body));
+    } catch (e) {
+      json(res, 400, { error: e.message });
+    }
     return;
   }
 
