@@ -102,26 +102,69 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
         'x-glm-account': safeAccountLabel,
       });
       let streamBuf = '';
+      let streamError = false;
       proxyRes.on('data', chunk => {
         res.write(chunk);
         streamBuf += chunk.toString();
       });
       proxyRes.on('end', () => {
         res.end();
+        if (streamError) return;
         const usage = extractUsageFromStream(streamBuf);
         recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
       });
-      proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
+      proxyRes.on('error', (err) => {
+        streamError = true;
+        reportError(account.id, err);
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+        log.warn(`Stream error from ${account.name}: ${err.message}`);
+        if (!res.writableEnded) res.end();
+      });
+      proxyRes.on('aborted', () => {
+        if (streamError) return;
+        streamError = true;
+        reportError(account.id, new Error('upstream aborted'));
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+        log.warn(`Stream aborted from ${account.name} (unexpected EOF)`);
+        if (!res.writableEnded) res.end();
+      });
     } else {
       const chunks = [];
+      let respError = false;
       proxyRes.on('data', chunk => chunks.push(chunk));
       proxyRes.on('end', () => {
+        if (respError) return;
         const respBuf = Buffer.concat(chunks);
         const headers = { 'content-type': 'application/json', 'x-glm-account': safeAccountLabel, 'content-length': respBuf.length };
         res.writeHead(200, headers);
         res.end(respBuf);
         const usage = extractUsageFromBody(respBuf.toString());
         recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
+      });
+      proxyRes.on('error', (err) => {
+        respError = true;
+        reportError(account.id, err);
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+        log.warn(`Response error from ${account.name}: ${err.message}`);
+        if (!res.headersSent) {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Upstream connection interrupted', type: 'server_error' } }));
+        } else if (!res.writableEnded) {
+          res.end();
+        }
+      });
+      proxyRes.on('aborted', () => {
+        if (respError) return;
+        respError = true;
+        reportError(account.id, new Error('upstream aborted'));
+        recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+        log.warn(`Response aborted from ${account.name} (unexpected EOF)`);
+        if (!res.headersSent) {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Upstream connection aborted (unexpected EOF)', type: 'server_error' } }));
+        } else if (!res.writableEnded) {
+          res.end();
+        }
       });
     }
   });
