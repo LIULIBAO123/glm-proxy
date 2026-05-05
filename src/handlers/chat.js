@@ -59,6 +59,9 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
     },
   };
 
+  const UPSTREAM_TIMEOUT_MS = 120_000;
+  let requestDone = false;
+
   const proxyReq = transport.request(options, (proxyRes) => {
     const status = proxyRes.statusCode;
 
@@ -170,11 +173,37 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
   });
 
   proxyReq.on('error', (err) => {
+    if (requestDone) return;
+    requestDone = true;
     reportError(account.id, err);
     log.error(`Request to ${account.name} failed:`, err.message);
     if (res.headersSent) return;
     res.writeHead(502, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: { message: `Upstream error: ${err.message}`, type: 'server_error' } }));
+  });
+
+  proxyReq.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+    if (requestDone) return;
+    requestDone = true;
+    proxyReq.destroy();
+    reportError(account.id, new Error('upstream timeout'));
+    recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+    log.warn(`Upstream timeout (${UPSTREAM_TIMEOUT_MS / 1000}s) for ${account.name}`);
+    if (!res.headersSent) {
+      res.writeHead(504, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Upstream request timed out', type: 'server_error' } }));
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+
+  req.on('close', () => {
+    if (requestDone) return;
+    requestDone = true;
+    proxyReq.destroy();
+    reportError(account.id, new Error('client disconnected (context deadline exceeded)'));
+    recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
+    log.warn(`Client disconnected while waiting for ${account.name} (likely context deadline exceeded)`);
   });
 
   proxyReq.write(requestBody);
