@@ -9,6 +9,8 @@ import { recordStats } from '../stats.js';
 import https from 'https';
 import http from 'http';
 
+const UPSTREAM_TIMEOUT_MS = 120_000;
+
 export async function handleChatCompletions(req, res, body, _excludeAccountId) {
   let payload;
   try {
@@ -59,8 +61,8 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
     },
   };
 
-  const UPSTREAM_TIMEOUT_MS = 120_000;
   let requestDone = false;
+  function markDone() { requestDone = true; }
 
   const proxyReq = transport.request(options, (proxyRes) => {
     const status = proxyRes.statusCode;
@@ -69,6 +71,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       let errorBody = '';
       proxyRes.on('data', chunk => { errorBody += chunk; });
       proxyRes.on('end', () => {
+        markDone();
         reportError(account.id, new Error(`HTTP ${status}: ${errorBody.slice(0, 200)}`));
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Account ${account.name} returned ${status}: ${errorBody.slice(0, 200)}`);
@@ -111,13 +114,16 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
         streamBuf += chunk.toString();
       });
       proxyRes.on('end', () => {
+        markDone();
         res.end();
         if (streamError) return;
         const usage = extractUsageFromStream(streamBuf);
         recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
       });
       proxyRes.on('error', (err) => {
+        if (streamError) return;
         streamError = true;
+        markDone();
         reportError(account.id, err);
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Stream error from ${account.name}: ${err.message}`);
@@ -126,6 +132,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       proxyRes.on('aborted', () => {
         if (streamError) return;
         streamError = true;
+        markDone();
         reportError(account.id, new Error('upstream aborted'));
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Stream aborted from ${account.name} (unexpected EOF)`);
@@ -137,6 +144,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       proxyRes.on('data', chunk => chunks.push(chunk));
       proxyRes.on('end', () => {
         if (respError) return;
+        markDone();
         const respBuf = Buffer.concat(chunks);
         const headers = { 'content-type': 'application/json', 'x-glm-account': safeAccountLabel, 'content-length': respBuf.length };
         res.writeHead(200, headers);
@@ -145,7 +153,9 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
         recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
       });
       proxyRes.on('error', (err) => {
+        if (respError) return;
         respError = true;
+        markDone();
         reportError(account.id, err);
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Response error from ${account.name}: ${err.message}`);
@@ -159,6 +169,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       proxyRes.on('aborted', () => {
         if (respError) return;
         respError = true;
+        markDone();
         reportError(account.id, new Error('upstream aborted'));
         recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
         log.warn(`Response aborted from ${account.name} (unexpected EOF)`);
@@ -174,7 +185,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
 
   proxyReq.on('error', (err) => {
     if (requestDone) return;
-    requestDone = true;
+    markDone();
     reportError(account.id, err);
     log.error(`Request to ${account.name} failed:`, err.message);
     if (res.headersSent) return;
@@ -184,7 +195,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
 
   proxyReq.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
     if (requestDone) return;
-    requestDone = true;
+    markDone();
     proxyReq.destroy();
     reportError(account.id, new Error('upstream timeout'));
     recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
@@ -199,9 +210,9 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
 
   req.on('close', () => {
     if (requestDone) return;
-    requestDone = true;
+    markDone();
     proxyReq.destroy();
-    reportError(account.id, new Error('client disconnected (context deadline exceeded)'));
+    reportError(account.id, new Error('client disconnected'));
     recordStats({ model: payload.model, success: false, duration: Date.now() - startTime, accountId: account.id, accountName: account.name });
     log.warn(`Client disconnected while waiting for ${account.name} (likely context deadline exceeded)`);
   });
@@ -255,4 +266,3 @@ function extractUsageFromStream(streamData) {
   }
   return { tokensUsed: 0, promptTokens: 0, completionTokens: 0 };
 }
-
