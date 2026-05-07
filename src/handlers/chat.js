@@ -11,6 +11,19 @@ import http from 'http';
 
 const UPSTREAM_TIMEOUT_MS = 120_000;
 
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+});
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+});
+
 export async function handleChatCompletions(req, res, body, _excludeAccountId) {
   let payload;
   try {
@@ -44,16 +57,18 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
   const base = account.baseUrl.replace(/\/$/, '');
   const targetUrl = new URL(base + '/chat/completions');
 
-  log.debug(`Forwarding to ${account.name || account.id} → ${targetUrl.href} (stream=${isStream})`);
+  log.info(`→ ${account.name} model=${payload.model} stream=${isStream} tokens=${payload.max_tokens || payload.max_completion_tokens || '-'}`);
 
   const requestBody = JSON.stringify(payload);
-  const transport = targetUrl.protocol === 'https:' ? https : http;
+  const isHttps = targetUrl.protocol === 'https:';
+  const transport = isHttps ? https : http;
 
   const options = {
     hostname: targetUrl.hostname,
-    port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
+    port: targetUrl.port || (isHttps ? 443 : 80),
     path: targetUrl.pathname + targetUrl.search,
     method: 'POST',
+    agent: isHttps ? httpsAgent : httpAgent,
     headers: {
       'content-type': 'application/json',
       'authorization': `Bearer ${account.apiKey}`,
@@ -97,6 +112,7 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
       return;
     }
 
+    const firstByteMs = Date.now() - startTime;
     reportSuccess(account.id);
     const safeAccountLabel = encodeURIComponent(account.name || account.id);
 
@@ -117,8 +133,10 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
         markDone();
         res.end();
         if (streamError) return;
+        const totalMs = Date.now() - startTime;
         const usage = extractUsageFromStream(streamBuf);
-        recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
+        log.info(`← ${account.name} OK stream firstByte=${firstByteMs}ms total=${totalMs}ms tokens=${usage.tokensUsed}`);
+        recordStats({ model: payload.model, success: true, duration: totalMs, accountId: account.id, accountName: account.name, ...usage });
       });
       proxyRes.on('error', (err) => {
         if (streamError) return;
@@ -149,8 +167,10 @@ export async function handleChatCompletions(req, res, body, _excludeAccountId) {
         const headers = { 'content-type': 'application/json', 'x-glm-account': safeAccountLabel, 'content-length': respBuf.length };
         res.writeHead(200, headers);
         res.end(respBuf);
+        const totalMs = Date.now() - startTime;
         const usage = extractUsageFromBody(respBuf.toString());
-        recordStats({ model: payload.model, success: true, duration: Date.now() - startTime, accountId: account.id, accountName: account.name, ...usage });
+        log.info(`← ${account.name} OK json firstByte=${firstByteMs}ms total=${totalMs}ms tokens=${usage.tokensUsed}`);
+        recordStats({ model: payload.model, success: true, duration: totalMs, accountId: account.id, accountName: account.name, ...usage });
       });
       proxyRes.on('error', (err) => {
         if (respError) return;
